@@ -1,27 +1,28 @@
 module cebulion_coin::cebulion_coin {
     use sui::clock::Clock;
     use sui::coin::{Coin, TreasuryCap};
-    use sui::url;
+    use sui::coin_registry::{Self, CoinRegistry, MetadataCap};
+    use std::string;
 
     const E_NOT_AUTHORIZED: u64 = 0;
     const E_PAUSED: u64 = 1;
     const E_INSUFFICIENT_RESERVE: u64 = 2;
     const PEG_SCALE: u64 = 1_000_000;
 
-    /// One-Time Witness - must be uppercase of module name
+    /// One-Time Witness for using new_currency_with_otw
     public struct CEBULION_COIN has drop {}
 
     /// Shared governance object for PLN
     public struct GovernancePLN has key, store {
         id: sui::object::UID,
         treasury: TreasuryCap<CEBULION_COIN>,
+        metadata_cap: MetadataCap<CEBULION_COIN>,
         owner: address,
         paused: bool,
         reference_rate: u64,
         fiat_reserve: u64,
     }
 
-    // Events remain the same...
     public struct MintEvent has copy, drop, store {
         recipient: address,
         amount: u64,
@@ -49,25 +50,25 @@ module cebulion_coin::cebulion_coin {
     fun init(witness: CEBULION_COIN, ctx: &mut sui::tx_context::TxContext) {
         let owner = sui::tx_context::sender(ctx);
 
-        let icon_url = url::new_unsafe_from_bytes(
-            b"https://github.com/jakubGodula/cebulion_coin/blob/main/imgs/PLNS.png?raw=true"
-        );
-        
-        let (treasury_cap_pln, metadata_pln) = sui::coin::create_currency(
+        // Step 1: Create currency with OTW - returns (CurrencyInitializer, TreasuryCap)
+        let (initializer, treasury_cap) = coin_registry::new_currency_with_otw(
             witness,
-            6,
-            b"PLNS",
-            b"Cebulion PLN",
-            b"PLN-pegged stablecoin collateralized off-chain by Cebulion.",
-            option::some(icon_url),
+            6u8,
+            string::utf8(b"PLNS"),
+            string::utf8(b"Cebulion PLN"),
+            string::utf8(b"PLN-pegged stablecoin collateralized off-chain by Cebulion."),
+            string::utf8(b"https://github.com/jakubGodula/cebulion_coin/blob/main/imgs/PLNS.png?raw=true"),
             ctx,
         );
-        
-        sui::transfer::public_freeze_object(metadata_pln);
-        
+
+        // Step 2: Finalize - this returns MetadataCap and shares the Currency object
+        let metadata_cap = coin_registry::finalize(initializer, ctx);
+
+        // Create and share governance object
         let governance_pln = GovernancePLN {
             id: sui::object::new(ctx),
-            treasury: treasury_cap_pln,
+            treasury: treasury_cap,
+            metadata_cap,
             owner,
             paused: false,
             reference_rate: PEG_SCALE,
@@ -75,8 +76,6 @@ module cebulion_coin::cebulion_coin {
         };
         sui::transfer::public_share_object(governance_pln);
     }
-
-    // Pozostałe funkcje - zmień typy z CebulionPLN na CEBULION_COIN
 
     public fun owner_pln(governance: &GovernancePLN): address {
         governance.owner
